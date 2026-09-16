@@ -1,1 +1,393 @@
+<!DOCTYPE html>
+<html lang="hr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Generator šahovskih zadataka</title>
+<link rel="stylesheet" href="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.css">
+<style>
+  :root {
+    --border: #ccc;
+  }
+  * {
+    box-sizing: border-box;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+    color-adjust: exact;
+  }
+  html, body {
+    margin: 0;
+    padding: 0;
+  }
+  body {
+    font-family: Arial, Helvetica, sans-serif;
+    background: #eee;
+    color: #222;
+  }
+
+  /* ---------- Input screen ---------- */
+  #inputScreen {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 20px;
+    background: #fff;
+  }
+  #inputScreen h1 { text-align: center; }
+  .meta-row {
+    display: flex;
+    gap: 20px;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+  .meta-row label { display: block; font-weight: bold; margin-bottom: 4px; }
+  .meta-row input[type=text], .meta-row input[type=date] {
+    width: 100%;
+    padding: 6px;
+    font-size: 14px;
+  }
+  .meta-row .field { flex: 1; min-width: 200px; }
+
+  .diagram-inputs {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 15px;
+    margin-bottom: 20px;
+  }
+  fieldset.diagram-fs {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px;
+  }
+  fieldset.diagram-fs legend { font-weight: bold; padding: 0 6px; }
+  .diagram-fs label { display: block; font-size: 13px; font-weight: bold; margin-top: 8px; }
+  .diagram-fs input[type=text], .diagram-fs textarea {
+    width: 100%;
+    padding: 5px;
+    font-size: 13px;
+    font-family: inherit;
+    resize: vertical;
+  }
+  .diagram-fs textarea { min-height: 50px; }
+
+  #goBtn {
+    display: block;
+    margin: 20px auto;
+    padding: 12px 30px;
+    font-size: 16px;
+    font-weight: bold;
+    background: #2c6e2f;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #goBtn:hover { background: #245a26; }
+
+  #backBtn {
+    display: block;
+    margin: 10px auto;
+    padding: 8px 20px;
+    font-size: 14px;
+    cursor: pointer;
+  }
+
+  /* ---------- Output screen (A4 pages) ---------- */
+  #outputScreen { padding: 10px 0; }
+
+  .page {
+    width: 210mm;
+    /* Deliberately less than 297mm: leaving real slack at the bottom avoids a
+       known print bug where content that exactly fills the page combined with
+       a forced page-break-after can produce an extra blank page. */
+    height: 280mm;
+    padding: 15mm;
+    margin: 0 auto 10mm auto;
+    background: #fff;
+    box-shadow: 0 0 6px rgba(0,0,0,.3);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .page-header {
+    text-align: center;
+    margin-bottom: 6mm;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .page-header h2 { margin: 0 0 2mm 0; }
+  .page-header .page-date { font-size: 12pt; color: #444; }
+
+  .grid {
+    /* Fixed height instead of flex:1 - during real print pagination, Chromium
+       does not reliably resolve flex-grow height inside a fragmented .page,
+       which made this grow unbounded and pushed diagrams onto extra pages. */
+    height: 225mm;
+    overflow: hidden;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    /* Flexbox wrap instead of CSS Grid: Chromium's grid print-fragmentation is
+       buggy and was inserting a spurious blank page around the grid container. */
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5mm;
+  }
+
+  .diagram-card {
+    width: calc(50% - 2.5mm);
+    height: 71mm;
+    border: 1px solid var(--border);
+    border-radius: 3mm;
+    padding: 3mm;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .diagram-card .card-title { font-size: 10pt; font-weight: bold; margin-bottom: 1mm; }
+  .diagram-card .question {
+    font-size: 9.5pt;
+    margin-bottom: 2mm;
+    min-height: 8mm;
+    white-space: pre-wrap;
+  }
+  .board-row {
+    display: flex;
+    flex: 1;
+    align-items: center;
+    justify-content: center;
+    gap: 3mm;
+    min-height: 0;
+    min-width: 0;
+  }
+  .board-container { width: 100%; max-width: 50mm; max-height: 50mm; aspect-ratio: 1 / 1; }
+  .indicator {
+    width: 6mm;
+    height: 6mm;
+    border: 1px solid #000;
+    flex-shrink: 0;
+  }
+  .indicator.white { background: #fff; }
+  .indicator.black { background: #000; }
+
+  /* Fixed height instead of flex:1 - see .grid comment above for why. */
+  .solutions-list { height: 225mm; overflow: hidden; page-break-inside: avoid; break-inside: avoid; }
+  .solution-entry { margin-bottom: 6mm; page-break-inside: avoid; break-inside: avoid; }
+  .solution-entry h3 { margin: 0 0 1mm 0; font-size: 12pt; }
+  .solution-entry p { margin: 0; font-size: 11pt; white-space: pre-wrap; }
+
+  @media print {
+    body { background: #fff; }
+    #inputScreen { display: none !important; }
+    .no-print { display: none !important; }
+    .page {
+      box-shadow: none;
+      margin: 0;
+      page-break-after: always;
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+    .page:last-child { page-break-after: auto; }
+  }
+
+  @page {
+    size: A4;
+    margin: 0;
+  }
+</style>
+</head>
+<body>
+
+<!-- ==================== INPUT SCREEN ==================== -->
+<div id="inputScreen">
+  <h1>Generator šahovskih zadataka</h1>
+
+  <div class="meta-row">
+    <div class="field">
+      <label for="titleInput">Naziv A4 stranice</label>
+      <input type="text" id="titleInput" placeholder="npr. Šahovski zadaci - 7. rujna 2026.">
+    </div>
+    <div class="field">
+      <label for="dateInput">Datum</label>
+      <input type="date" id="dateInput">
+    </div>
+  </div>
+
+  <div class="diagram-inputs">
+    <!-- 6 fieldsets generated below -->
+  </div>
+
+  <button id="goBtn" type="button">Gotovo</button>
+</div>
+
+<!-- ==================== OUTPUT SCREEN ==================== -->
+<div id="outputScreen" style="display:none;">
+
+  <button id="backBtn" class="no-print" type="button">Natrag na unos</button>
+
+  <!-- Page 1: diagrams -->
+  <div class="page">
+    <div class="page-header">
+      <h2 id="outTitle"></h2>
+      <div class="page-date" id="outDate"></div>
+    </div>
+    <div class="grid" id="diagramGrid">
+      <!-- 6 diagram cards generated below -->
+    </div>
+  </div>
+
+  <!-- Page 2: solutions -->
+  <div class="page">
+    <div class="page-header">
+      <h2>Rješenja</h2>
+    </div>
+    <div class="solutions-list" id="solutions"></div>
+  </div>
+
+</div>
+
+<script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+<script src="https://unpkg.com/@chrisoakman/chessboardjs@1.0.0/dist/chessboard-1.0.0.min.js"></script>
+<script>
+(function () {
+  // The npm package's dist/ only ships JS+CSS (no images), so piece images
+  // must be loaded from the chessboardjs.com site itself.
+  const PIECE_THEME = 'https://chessboardjs.com/img/chesspieces/wikipedia/{piece}.png';
+  const NUM_DIAGRAMS = 6;
+  let boards = [];
+
+  const inputsContainer = document.querySelector('.diagram-inputs');
+  const gridContainer = document.getElementById('diagramGrid');
+
+  // Build the 6 input fieldsets and the 6 output diagram cards.
+  for (let i = 1; i <= NUM_DIAGRAMS; i++) {
+    const fs = document.createElement('fieldset');
+    fs.className = 'diagram-fs';
+    fs.innerHTML =
+      '<legend>Zadatak ' + i + '</legend>' +
+      '<label for="fen' + i + '">FEN</label>' +
+      '<input type="text" id="fen' + i + '" placeholder="npr. rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1">' +
+      '<label for="question' + i + '">Pitanje</label>' +
+      '<textarea id="question' + i + '" placeholder="npr. Bijeli na potezu, matira u 2 poteza"></textarea>' +
+      '<label for="solution' + i + '">Rješenje</label>' +
+      '<textarea id="solution' + i + '" placeholder="Tekst s opisom rješenja"></textarea>';
+    inputsContainer.appendChild(fs);
+
+    const card = document.createElement('div');
+    card.className = 'diagram-card';
+    card.innerHTML =
+      '<div class="card-title">Zadatak ' + i + '</div>' +
+      '<div class="question" id="q' + i + '"></div>' +
+      '<div class="board-row">' +
+        '<div class="board-container" id="board' + i + '"></div>' +
+        '<div class="indicator" id="ind' + i + '" title=""></div>' +
+      '</div>';
+    gridContainer.appendChild(card);
+  }
+
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  function getActiveColor(fen) {
+    if (!fen || fen === 'start') return 'w';
+    const parts = fen.trim().split(/\s+/);
+    return parts[1] === 'b' ? 'b' : 'w';
+  }
+
+  function formatDate(isoDate) {
+    if (!isoDate) return '';
+    const parts = isoDate.split('-');
+    if (parts.length !== 3) return isoDate;
+    return parts[2] + '.' + parts[1] + '.' + parts[0] + '.';
+  }
+
+  function generate() {
+    const title = document.getElementById('titleInput').value.trim() || 'Šahovski zadaci';
+    const dateVal = document.getElementById('dateInput').value;
+
+    document.getElementById('outTitle').textContent = title;
+    document.getElementById('outDate').textContent = formatDate(dateVal);
+
+    const solutionsDiv = document.getElementById('solutions');
+    solutionsDiv.innerHTML = '';
+
+    boards.forEach(function (b) { if (b && b.destroy) b.destroy(); });
+    boards = [];
+
+    // Show the output screen before creating the boards: chessboard.js measures
+    // the container width at creation time, and a hidden (display:none) container
+    // has zero width, which makes the board fail to build correctly.
+    document.getElementById('inputScreen').style.display = 'none';
+    document.getElementById('outputScreen').style.display = 'block';
+    window.scrollTo(0, 0);
+
+    for (let i = 1; i <= NUM_DIAGRAMS; i++) {
+      const fenRaw = document.getElementById('fen' + i).value.trim();
+      const fen = fenRaw || 'start';
+      const question = document.getElementById('question' + i).value.trim();
+      const solution = document.getElementById('solution' + i).value.trim();
+
+      document.getElementById('q' + i).textContent = question;
+
+      const activeColor = getActiveColor(fenRaw);
+      const indicator = document.getElementById('ind' + i);
+      indicator.classList.remove('white', 'black');
+      indicator.classList.add(activeColor === 'b' ? 'black' : 'white');
+      indicator.title = activeColor === 'b' ? 'Crni na potezu' : 'Bijeli na potezu';
+
+      const orientation = activeColor === 'b' ? 'black' : 'white';
+      const board = Chessboard('board' + i, {
+        position: fen,
+        orientation: orientation,
+        showNotation: false,
+        pieceTheme: PIECE_THEME
+      });
+      boards.push(board);
+
+      const entry = document.createElement('div');
+      entry.className = 'solution-entry';
+      entry.innerHTML =
+        '<h3>Zadatak ' + i + '</h3>' +
+        '<p>' + escapeHtml(solution).replace(/\n/g, '<br>') + '</p>';
+      solutionsDiv.appendChild(entry);
+    }
+
+    // Force a resize once layout has settled (fonts/images loaded, mm units resolved).
+    setTimeout(function () {
+      boards.forEach(function (b) { if (b && b.resize) b.resize(); });
+    }, 100);
+  }
+
+  function goBack() {
+    document.getElementById('outputScreen').style.display = 'none';
+    document.getElementById('inputScreen').style.display = 'block';
+  }
+
+  document.getElementById('goBtn').addEventListener('click', generate);
+  document.getElementById('backBtn').addEventListener('click', goBack);
+
+  // Chrome/Edge fire a 'resize' event when opening the print dialog/preview, with a
+  // transient viewport size that can be 0-width; calling board.resize() then would
+  // wipe out the already-correct board. Only resize boards whose container still
+  // has real width.
+  function resizeVisibleBoards() {
+    boards.forEach(function (b, idx) {
+      if (!b || !b.resize) return;
+      const el = document.getElementById('board' + (idx + 1));
+      if (el && el.clientWidth > 0) b.resize();
+    });
+  }
+
+  window.addEventListener('resize', resizeVisibleBoards);
+})();
+</script>
+
+</body>
+</html>
+
 
